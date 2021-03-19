@@ -1,0 +1,18 @@
+{
+    "connector.class": "org.apache.kafka.connect.mirror.MirrorSourceConnector",
+    "key.converter": "io.confluent.connect.replicator.util.ByteArrayConverter",
+    "value.converter": "io.confluent.connect.replicator.util.ByteArrayConverter",
+    "header.converter": "io.confluent.connect.replicator.util.ByteArrayConverter",
+    "source.cluster.alias": "msk",
+    "source.cluster.bootstrap.servers": "broker:9092",
+    "target.cluster.bootstrap.servers" : "confluent.cloud:9092",
+    "target.kafka.security.protocol" : "SASL_SSL",
+    "sasl.jaas.config": "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"${API_KEY}\" password=\"${API_SECRET}\";",
+    "target.kafka.sasl.mechanism": "PLAIN",
+    "topics": "test-topic",
+    "consumer.group.id": "mm2-msc-cons",
+    "sync.topic.acls.interval.seconds": "20",
+    "sync.topic.configs.interval.seconds": "20",
+    "refresh.topics.interval.seconds": "20",
+    "refresh.groups.interval.seconds": "20"
+}
