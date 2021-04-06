@@ -1,5 +1,5 @@
 # mm2-demo
-This repository is meant to demo Mirror Maker 2 for Kafka
+This repository provides the configs for Mirror Maker 2 for Kafka.
 
 ### Pre-requisites
 - Install Kafka Connect instance
@@ -114,3 +114,114 @@ curl -s localhost:8083/connectors/mm2-hbt/status | jq .
 ```
 
 Please keep in mind that the json files provided are sample MirrorMaker 2 connector configurations and that they need to ebe updated accordingly.
+
+### Consumer Group Offset Sync
+NOTE: Do this step only if you’re using the consumer migration methodology with a background process to sync MM2 checkpointed offsets to the __consumer_offsets internal topic at the destination.
+
+You can view and download the source code of the Consumer Group Offset Sync Application here: https://github.com/aws-samples/mirrormaker2-msk-migration/tree/master/MM2GroupOffsetSync
+
+### Default Replication Policy
+Using Default Replication Policy and a background process to sync MM2 checkpointed offsets to the __consumer_offsets internal topic at the destination
+Note: This requires NO change to the consumer code except the topic pattern it subscribes to. This does require a separate application that syncs offsets, runs in the background and has a dependency on connect-mirror-client and kafka-clients available with Apache Kafka 2.5.0 and above.
+
+Steps:
+
+* Start MM2.
+This will detect the topic and create it in the destination and start replicating messages. As mentioned above, the replicated topic at the destination will be created in the format `<source-cluster-alias>.<topic>` as it uses the DefaultReplicationPolicy. By default, it will use an `auto.offset.reset = earliest` setting and start reading messages from the beginning of the retention period for the topic in the source.
+
+* Start the MM2GroupOffsetSync application.
+This application periodically syncs the MM2 checkpointed offsets to the __consumer_offsets internal topic at the destination. In order to start the app do the following:
+
+  * Go to the /tmp/kafka dir. Make a copy of the /tmp/kafka/consumer.properties file and update BOOTSTRAP_SERVERS_CONFIG to point to the destination Kafka cluster.
+
+    *  ``` cd /tmp/kafka
+           cp /tmp/kafka/consumer.properties /tmp/kafka/consumer.properties_sync_dest
+           vim /tmp/kafka/consumer.properties_sync_dest
+       ```
+
+   *  The below command runs the help command to show the usage of the application. 
+
+        * ```
+            java -jar /tmp/kafka/MM2GroupOffsetSync-1.0-SNAPSHOT.jar -h
+          ```
+   * Run the MM2 Consumer Group Offset Sync Application. To kill the application process, note down the pid (process id) of the application process. Use kill <pid> to kill the process.
+        * ```
+           java -jar /tmp/kafka/MM2GroupOffsetSync-1.0-SNAPSHOT.jar -cgi mm2TestConsumer1 -src msksource  -pfp /tmp/kafka/consumer.properties_sync_dest 
+          ```
+
+* Stop the consumer.
+The consumer should be designed to do a commitsync before shutting down cleanly, in which case the last consumed offset will be committed to the source __consumer_offsets topic and then checkpointed by MM2 to the destination in the msksource.checkpoints.internal topic. If the consumer does not shutdown cleanly, or the consumer is re-started pointing to the destination within the configured checkpoint interval, there could be some duplicate records when it resumes. In order to deal with that, the consumer should be idempotent. In our case, the consumer does do a commitsync when it shuts down.
+
+* Wait for the MM2GroupOffsetSync application to sync the last committed offset, then stop the application.
+The application checks to make sure the consumer group in the destination is empty before syncing offsets so as not to overwrite the consumer after it has failed over. However, shutting it down would be safer.
+
+* Start the consumer against the destination Apache Kafka cluster by changing the bootstrap brokers configuration.
+
+* In this case, MM2 utilizes the DefaultReplicationPolicy implementation. As mentioned above, this creates topics in the destination cluster in the <source-cluster-alias>.<topic> format. The consumer, when it starts up will subscribe to the replicated topic based on the topic pattern specified which should account for both the source topic and the replicated topic names.
+
+* It will find the offsets for its consumer group in the destination, and it will start consuming from the last synced offset.
+
+* At this point, the producer is still producing messages to the source which are getting replicated to the destination, and the consumer is reading the replicated messages.
+
+* Stop the producer.
+This could be at any convenient time after the consumer has moved over.
+
+(Optional) Create the source topic at the destination.
+The consumer can either continue to read messages from the replicated topic (<source-cluster-alias>.<topic>) and the producer is modified to point to the replicated topic which will require a producer code change or the source topic can be created in the destination which will require no producer code change.
+
+Start the producer against the destination Apache Kafka Amazon MSK cluster by changing the bootstrap brokers configuration.
+If the producer is stopped and re-started against the destination before all the messages in the replication pipeline are consumed by the consumer, there could be issues with ordering. If ordering is important, wait for all the messages to replicate before starting the producer.
+
+Stop MM2.
+
+### Custom Replication Policy
+
+Using a custom Replication Policy and a background process to sync MM2 checkpointed offsets to the __consumer_offsets internal topic at the destination
+Note: This requires NO change to the consumer code. This does require a separate application that syncs offsets, runs in the background and has a dependency on connect-mirror-client and kafka-clients available with Apache Kafka 2.5.0 and above.
+
+Steps:
+
+* Start MM2.
+This will detect the topic and create it in the destination and start replicating messages. The MirrorSourceConnector configuration will include a custom ReplicationPolicy class which will enable the replicated topic at the destination to be created with the same name as the source instead of the default <source-cluster-alias>.<topic> format. By default, it will use an `auto.offset.reset = earliest` setting and start reading messages from the beginning of the retention period for the topic in the source.
+
+* Start the MM2GroupOffsetSync application.
+This application periodically syncs the MM2 checkpointed offsets to the __consumer_offsets internal topic at the destination.
+
+    * Go to the /tmp/kafka dir. Make a copy of the /tmp/kafka/consumer.properties file and update BOOTSTRAP_SERVERS_CONFIG to point to the destination Kafka cluster.
+    
+        *  ``` cd /tmp/kafka
+               cp /tmp/kafka/consumer.properties /tmp/kafka/consumer.properties_sync_dest
+               vim /tmp/kafka/consumer.properties_sync_dest
+           ```
+    
+       *  The below command runs the help command to show the usage of the application. 
+    
+            * ```
+                java -jar /tmp/kafka/MM2GroupOffsetSync-1.0-SNAPSHOT.jar -h
+              ```
+       * Run the MM2 Consumer Group Offset Sync Application. To kill the application process, note down the pid (process id) of the application process. Use kill <pid> to kill the process.
+            * ```
+               java -jar /tmp/kafka/MM2GroupOffsetSync-1.0-SNAPSHOT.jar -cgi mm2TestConsumer1 -src msksource  -pfp /tmp/kafka/consumer.properties_sync_dest -rpc com.amazonaws.kafka.samples.CustomMM2ReplicationPolicy
+              ```
+
+* Stop the consumer.
+The consumer should be designed to do a commitsync before shutting down cleanly, in which case the last consumed offset will be committed to the source __consumer_offsets topic and then checkpointed by MM2 to the destination in the msksource.checkpoints.internal topic. If the consumer does not shutdown cleanly or the consumer is re-started pointing to the destination within the configured checkpoint interval, there could be some duplicate records when it resumes. In order to deal with that, the consumer should be idempotent. In our case, the consumer does do a commitsync when it shuts down.
+
+* Wait for the MM2GroupOffsetSync application to sync the last committed offset, then stop the application.
+The application checks to make sure the consumer group in the destination is empty before syncing offsets so as not to overwrite the consumer after it has failed over. However, shutting it down would be safer.
+
+* Start the consumer against the destination Apache Kafka cluster by changing the bootstrap brokers configuration.
+
+    * The consumer, when it starts up will subscribe to the replicated topic based on the topic pattern specified and pick up the replicated topic which would be the same as the source topic name.
+It will find the offsets for its consumer group in the destination, and it will start consuming from the last synced offset.
+
+    * At this point, the producer is still producing messages to the source which are getting replicated to the destination, and the consumer is reading the replicated messages.
+
+* Stop the producer.
+This could be at any convenient time after the consumer has moved over.
+
+* Start the producer against the destination Apache Kafka Amazon MSK cluster by changing the bootstrap brokers configuration.
+If the producer is stopped and re-started against the destination before all the messages in the replication pipeline are consumed by the consumer, there could be issues with ordering. If ordering is important, wait for all the messages to replicate before starting the producer.
+
+* Stop MM2.
+
